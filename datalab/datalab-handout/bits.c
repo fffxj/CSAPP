@@ -140,7 +140,7 @@ NOTES:
  *   Rating: 1
  */
 int bitXor(int x, int y) {
-  return 2;
+  return ~(x & y) & ~(~x & ~y);
 }
 /* 
  * tmin - return minimum two's complement integer 
@@ -149,7 +149,7 @@ int bitXor(int x, int y) {
  *   Rating: 1
  */
 int tmin(void) {
-  return 2;
+  return 0x1 << 31;
 }
 //2
 /*
@@ -160,7 +160,7 @@ int tmin(void) {
  *   Rating: 2
  */
 int isTmax(int x) {
-  return 2;
+  return !((~x) ^ (x + 1)) & !!(~x);
 }
 /* 
  * allOddBits - return 1 if all odd-numbered bits in word set to 1
@@ -170,7 +170,7 @@ int isTmax(int x) {
  *   Rating: 2
  */
 int allOddBits(int x) {
-  return 2;
+  return !((~x) & (0xAA + (0xAA << 8) + (0xAA << 16) + (0xAA << 24)));
 }
 /* 
  * negate - return -x 
@@ -180,7 +180,7 @@ int allOddBits(int x) {
  *   Rating: 2
  */
 int negate(int x) {
-  return 2;
+  return ~x + 1;
 }
 //3
 /* 
@@ -193,7 +193,7 @@ int negate(int x) {
  *   Rating: 3
  */
 int isAsciiDigit(int x) {
-  return 2;
+  return (!((x & 0xF8) ^ 0x30) | !(x ^ 0x38) | !(x ^ 0x39)) & !((x & ~0xFF) ^ 0x0);
 }
 /* 
  * conditional - same as x ? y : z 
@@ -203,7 +203,7 @@ int isAsciiDigit(int x) {
  *   Rating: 3
  */
 int conditional(int x, int y, int z) {
-  return 2;
+  return ((y << (!!x + ~0x0)) << !x ) + ((z << (!x + ~0x0)) << !!x);
 }
 /* 
  * isLessOrEqual - if x <= y  then return 1, else return 0 
@@ -213,7 +213,12 @@ int conditional(int x, int y, int z) {
  *   Rating: 3
  */
 int isLessOrEqual(int x, int y) {
-  return 2;
+  int equal = !(x ^ y);
+  int signOfX = (x >> 31) & 0x1;
+  int signOfY = (y >> 31) & 0x1;
+  int isLessWithDiffSign = signOfX & !signOfY;
+  int isLessWithSameSign = (!(signOfX ^ signOfY)) & ((x + ~y + 1) >> 31);
+  return equal | isLessWithDiffSign | isLessWithSameSign;
 }
 //4
 /* 
@@ -225,7 +230,7 @@ int isLessOrEqual(int x, int y) {
  *   Rating: 4 
  */
 int logicalNeg(int x) {
-  return 2;
+  return (~(x | (~x + 1)) >> 31) & 0x1;
 }
 /* howManyBits - return the minimum number of bits required to represent x in
  *             two's complement
@@ -240,7 +245,24 @@ int logicalNeg(int x) {
  *  Rating: 4
  */
 int howManyBits(int x) {
-  return 0;
+  int bits32, bits16, bits8, bits4, bits2, bits1;
+  int shift32, shift16, shift8, shift4, shift2, shift1;
+  int sign = (x >> 31) & 0x1;
+  bits32 = x ^ (~sign + 1);
+
+  shift32 = !!(bits32 >> 16) << 4;
+  bits16 = bits32 >> shift32;
+  shift16 = !!(bits16 >> 8) << 3;
+  bits8 = bits16 >> shift16;
+  shift8 = !!(bits8 >> 4) << 2;
+  bits4 = bits8 >> shift8;
+  shift4 = !!(bits4 >> 2) << 1;
+  bits2 = bits4 >> shift4;
+  shift2 = !!(bits2 >> 1);
+  bits1 = bits2 >> shift2;
+  shift1 = bits1;
+
+  return shift32 + shift16 + shift8 + shift4 + shift2 + shift1 + 1;
 }
 //float
 /* 
@@ -255,7 +277,18 @@ int howManyBits(int x) {
  *   Rating: 4
  */
 unsigned float_twice(unsigned uf) {
-  return 2;
+  int sign = uf & 0x80000000;
+  int expr = uf & 0x7f800000;
+  int frac = uf & 0x7fffff;
+  
+  if (expr == 0x7f800000)
+    return uf;
+  if (expr == 0x0)
+    return sign | (uf << 1);
+  if (expr == 0x7f000000)
+    frac = 0x0;
+  expr += 0x800000;
+  return sign | expr | frac;
 }
 /* 
  * float_i2f - Return bit-level equivalent of expression (float) x
@@ -266,8 +299,46 @@ unsigned float_twice(unsigned uf) {
  *   Max ops: 30
  *   Rating: 4
  */
-unsigned float_i2f(int x) {
-  return 2;
+unsigned float_i2f(int x) {  
+  int sign, expr, frac;
+  int i, round, median;
+  int discard, discardMask, discardLen;
+  int absX = x >= 0 ? x : -x;
+
+  if (x == 0) return 0;
+  sign = x & 0x80000000;
+
+  i = 31;
+  while (!(absX >> i)) i--;
+  expr = (i + 127) << 23;
+
+  if (i <= 23) {
+    frac = (absX << (23 - i)) & 0x7fffff;
+  } else {
+    discardLen = i - 23;
+    discardMask = (0x1 << discardLen) - 1;
+    discard = absX & discardMask;
+    frac = (absX >> discardLen) & 0x7fffff;
+
+    median = 0x1 << (i - 24);
+    if (discard > median)
+      round = 1;
+    else if (discard < median)
+      round = 0;
+    else {
+      if (frac & 0x1) round = 1;
+      else round = 0;
+    }
+    
+    if (frac + round == 0x800000) {
+      frac = 0x0;
+      expr += 0x800000;
+    } else {
+      frac += round;
+    }
+  }
+
+  return sign | expr | frac;
 }
 /* 
  * float_f2i - Return bit-level equivalent of expression (int) f
@@ -282,5 +353,24 @@ unsigned float_i2f(int x) {
  *   Rating: 4
  */
 int float_f2i(unsigned uf) {
-  return 2;
+  int exp, bias, x;
+  int sign = uf & 0x80000000;
+  int expr = uf & 0x7f800000;
+  int frac = uf & 0x7fffff;
+
+  exp = expr >> 23;
+  bias = exp ? exp - 127 : 1 - 127;
+
+  if (bias < 0)
+    return 0;
+  if (bias > 30)
+    return 0x80000000;
+
+  frac |= 0x800000;
+  if (bias <= 23)
+    x = frac >> (23 - bias);
+  else
+    x = frac << (bias - 23);
+
+  return sign ? -x : x;
 }
