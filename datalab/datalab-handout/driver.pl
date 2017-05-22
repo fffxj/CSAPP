@@ -16,7 +16,7 @@ use Getopt::Std;
 use lib ".";
 
 # Set to 1 to use btest, 0 to use the BDD checker.
-my $USE_BTEST = 0; 
+my $USE_BTEST = 1; 
 
 # Generic settings 
 $| = 1;      # Flush stdout each time
