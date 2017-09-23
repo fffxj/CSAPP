@@ -7,6 +7,22 @@
 #
 # Describe how and why you modified the baseline code.
 #
+# 1. Replace the pair of irmovq and addq with iaddq.
+# 2. Use loop unroolling:
+#    - Load and store more elements at the same time.
+#    - mrmovq rmmovq | mrmovq rmmovq -> mrmovq mrmovq rmmovq rmmovq
+# 
+# Code skeleton:
+#    Header: if eles < 8, goto L8; else repeat E8 until eles < 8.
+#    E8:     load and store 8 elements.
+#    L8:     if eles < 4, goto L4; else do E4 first.
+#    E4:     load and store 4 elements.
+#    L4:     if eles < 2, goto L2; else do E2 first.
+#    E2:     load and store 2 elements.
+#    L2:     if eles == 0, goto Done; else do E1 first.
+#    E1:     load and store 1 elements.
+#    Done:
+#
 ##################################################################
 # Do not modify this portion
 # Function prologue.
@@ -15,24 +31,118 @@ ncopy:
 
 ##################################################################
 # You can modify this portion
-	# Loop header
-	xorq %rax,%rax		# count = 0;
-	andq %rdx,%rdx		# len <= 0?
-	jle Done		# if so, goto Done:
+        # Header  
+        xorq %rax, %rax         # count = 0;
+        iaddq $-8, %rdx         # len -= 8;
+        jl L8                   # if len < 0, goto L8:
 
-Loop:	mrmovq (%rdi), %r10	# read val from src...
-	rmmovq %r10, (%rsi)	# ...and store it to dst
-	andq %r10, %r10		# val <= 0?
-	jle Npos		# if so, goto Npos:
-	irmovq $1, %r10
-	addq %r10, %rax		# count++
-Npos:	irmovq $1, %r10
-	subq %r10, %rdx		# len--
-	irmovq $8, %r10
-	addq %r10, %rdi		# src++
-	addq %r10, %rsi		# dst++
-	andq %rdx,%rdx		# len > 0?
-	jg Loop			# if so, goto Loop:
+        # Load and store 8 elements
+E8:     mrmovq (%rdi), %r8      # read val1 from src...
+        mrmovq 8(%rdi), %r9     # read val2 from src+8...
+        mrmovq 16(%rdi), %r10	# read val3 from src+16...
+        mrmovq 24(%rdi), %r11	# read val4 from src+24...
+        mrmovq 32(%rdi), %r12   # read val5 from src+32...
+        mrmovq 40(%rdi), %r13   # read val6 from src+40...
+        mrmovq 48(%rdi), %r14	# read val7 from src+48...
+        mrmovq 56(%rdi), %rbx	# read val8 from src+56...
+        rmmovq %r8, (%rsi)	# ...and store val1 to dst
+	rmmovq %r9, 8(%rsi)	# ...and store val2 to dst+8
+        rmmovq %r10, 16(%rsi)	# ...and store val3 to dst+16
+	rmmovq %r11, 24(%rsi)	# ...and store val4 to dst+24
+        rmmovq %r12, 32(%rsi)	# ...and store val5 to dst+32
+	rmmovq %r13, 40(%rsi)	# ...and store val6 to dst+40
+        rmmovq %r14, 48(%rsi)	# ...and store val7 to dst+48
+	rmmovq %rbx, 56(%rsi)	# ...and store val8 to dst+56
+        andq %r8, %r8		# val1 <= 0?
+ 	jle E8N1		# if so, goto E8N1:
+        iaddq $1, %rax          # count++
+E8N1:	andq %r9, %r9		# val2 <= 0?
+ 	jle E8N2		# if so, goto E8N2:
+        iaddq $1, %rax          # count++
+E8N2:   andq %r10, %r10		# val3 <= 0?
+ 	jle E8N3		# if so, goto E8N3:
+        iaddq $1, %rax          # count++
+E8N3:	andq %r11, %r11		# val4 <= 0?
+ 	jle E8N4		# if so, goto E8N4:
+        iaddq $1, %rax          # count++
+E8N4:	andq %r12, %r12		# val5 <= 0?
+ 	jle E8N5		# if so, goto E8N5:
+        iaddq $1, %rax          # count++
+E8N5:   andq %r13, %r13		# val6 <= 0?
+ 	jle E8N6		# if so, goto E8N6:
+        iaddq $1, %rax          # count++
+E8N6:   andq %r14, %r14		# val7 <= 0?
+ 	jle E8N7		# if so, goto E8N7:
+        iaddq $1, %rax          # count++
+E8N7:   andq %rbx, %rbx		# val8 <= 0?
+ 	jle E8N8		# if so, goto E8N8:
+        iaddq $1, %rax          # count++
+E8N8:   iaddq $64, %rdi         # src += 8
+	iaddq $64, %rsi         # dst += 8
+        iaddq $-8, %rdx         # len -= 8;
+        jge E8                  # if len >= 0, goto E8:
+
+        # Eles < 8
+L8:     # iaddq $8, %rdx          # restore the true len;
+        # iaddq $-4, %rdx         # len -= 4;
+        iaddq $4, %rdx
+        jl L4                   # if len < 0, goto L4:
+
+        # Load and store 4 elements
+E4:     mrmovq (%rdi), %r8      # read val1 from src...
+        mrmovq 8(%rdi), %r9     # read val2 from src+8...
+        mrmovq 16(%rdi), %r10	# read val3 from src+16...
+        mrmovq 24(%rdi), %r11	# read val4 from src+24...
+        rmmovq %r8, (%rsi)	# ...and store val1 to dst
+	rmmovq %r9, 8(%rsi)	# ...and store val2 to dst+8
+        rmmovq %r10, 16(%rsi)	# ...and store val3 to dst+16
+	rmmovq %r11, 24(%rsi)	# ...and store val4 to dst+24
+        andq %r8, %r8		# val1 <= 0?
+ 	jle E4N1		# if so, goto E4N1:
+        iaddq $1, %rax          # count++
+E4N1:	andq %r9, %r9		# val2 <= 0?
+ 	jle E4N2		# if so, goto E4N2:
+        iaddq $1, %rax          # count++
+E4N2:   andq %r10, %r10		# val3 <= 0?
+ 	jle E4N3		# if so, goto E4N3:
+        iaddq $1, %rax          # count++
+E4N3:	andq %r11, %r11		# val4 <= 0?
+ 	jle E4N4		# if so, goto E4N4:
+        iaddq $1, %rax          # count++
+E4N4:   iaddq $32, %rdi         # src += 8
+	iaddq $32, %rsi         # dst += 8
+        iaddq $-4, %rdx         # len -= 4
+
+        # Eles < 4
+L4:     # iaddq $4, %rdx          # restore the true len
+        # iaddq $-1, %rdx         # len -= 1
+        iaddq $3, %rdx
+        jle L2                  # if len <= 1, goto L2:
+
+        # Load and store 2 elements
+E2:     mrmovq (%rdi), %r8      # read val1 from src...
+        mrmovq 8(%rdi), %r9     # read val2 from src+8...
+        rmmovq %r8, (%rsi)	# ...and store val1 to dst
+	rmmovq %r9, 8(%rsi)	# ...and store val2 to dst+8
+        andq %r8, %r8		# val1 <= 0?
+ 	jle E2N1		# if so, goto Npos1:
+        iaddq $1, %rax          # count++
+E2N1:	andq %r9, %r9		# val2 <= 0?
+ 	jle E2N2		# if so, goto Npos2:
+        iaddq $1, %rax          # count++
+E2N2:   iaddq $16, %rdi         # src += 2
+	iaddq $16, %rsi         # dst += 2
+        iaddq $-2, %rdx         # len -= 2
+
+        # Eles < 2
+L2:     jne Done                # if len != 1, goto Done:
+
+        # Load and store 1 element
+E1:     mrmovq (%rdi), %r10	# read val from src...
+        andq %r10, %r10		# val <= 0?
+	rmmovq %r10, (%rsi)	# ...and store val to dst
+ 	jle Done		# if so, goto Done:
+        iaddq $1, %rax          # count++
 ##################################################################
 # Do not modify the following section of code
 # Function epilogue.
