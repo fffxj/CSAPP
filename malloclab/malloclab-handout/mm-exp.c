@@ -1,5 +1,5 @@
 /*
- * mm-imp.c - segregated free list + modified mm_realloc function
+ * mm-imp.c - explicit free list + original mm_realloc function
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,8 +53,7 @@ team_t team = {
 #define NEXT_BLKP(bp)  ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp)  ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
-/* Given block ptr bp, compute/update address of next and previous free blocks
-   in the same list */
+/* Given block ptr bp, compute/update address of next and previous free blocks */
 #define GET_PREV(bp)      (void *)(*(unsigned int *)(bp))
 #define GET_NEXT(bp)      (void *)(*((unsigned int *)(bp) + 1))
 #define SET_PREV(bp, val) (*(unsigned int *)(bp) = (unsigned int)(val))
@@ -63,30 +62,17 @@ team_t team = {
 /* Global variables */
 static char *heap_listp = 0;  /* Pointer to first block */
 
-/* Pointers to free block lists */
-static void *root_16;
-static void *root_32;
-static void *root_64;
-static void *root_128;
-static void *root_256;
-static void *root_512;
-static void *root_1024;
-static void *root_2048;
-static void *root_4096;
-static void *root_etc;
+static void *free_listp = 0;  /* Pointer to first free block */
 
 /* Function prototypes for internal helper routines */
 static void *extend_heap(size_t words);
 static void place(void *bp, size_t asize);
-static void replace(void *bp, size_t asize);
 static void *find_fit(size_t asize);
 static void *coalesce(void *bp);
 
-static void init_free_root();
+static void init_free_list();
 static void insert_free_block(void *bp);
 static void remove_free_block(void *bp);
-static void **get_free_rootp(size_t asize);
-static void **get_greater_rootp(void **rootp);
 
 static void printblock(void *bp);
 static void checkblock(void *bp);
@@ -104,7 +90,7 @@ void mm_check() {
  */
 int mm_init(void)
 {
-  init_free_root();
+  init_free_list();
 
   /* Create the initial empty heap */
   if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1)
@@ -184,43 +170,8 @@ void mm_free(void *ptr)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-  /* size_t oldsize; */
-  /* void *newptr; */
-
-  /* /\* If size == 0 then this is just free, and we return NULL. *\/ */
-  /* if(size == 0) { */
-  /*   mm_free(ptr); */
-  /*   return 0; */
-  /* } */
-
-  /* /\* If oldptr is NULL, then this is just malloc. *\/ */
-  /* if(ptr == NULL) { */
-  /*   return mm_malloc(size); */
-  /* } */
-
-  /* newptr = mm_malloc(size); */
-
-  /* /\* If realloc() fails the original block is left untouched  *\/ */
-  /* if(!newptr) { */
-  /*   return 0; */
-  /* } */
-
-  /* /\* Copy the old data. *\/ */
-  /* oldsize = GET_SIZE(HDRP(ptr)); */
-  /* if(size < oldsize) oldsize = size; */
-  /* memcpy(newptr, ptr, oldsize); */
-
-  /* /\* Free the old block. *\/ */
-  /* mm_free(ptr); */
-
-  /* return newptr; */
-
-
-
-
+  size_t oldsize;
   void *newptr;
-  size_t asize;
-  size_t oldsize = GET_SIZE(HDRP(ptr));
 
   /* If size == 0 then this is just free, and we return NULL. */
   if(size == 0) {
@@ -233,30 +184,22 @@ void *mm_realloc(void *ptr, size_t size)
     return mm_malloc(size);
   }
 
-  if (size <= DSIZE)
-    asize = 2*DSIZE;
-  else
-    asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE);
-    
-  if (asize <= oldsize) {
-    replace(ptr, asize);
-    return ptr;
-  } else {
-      size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
-      size_t next_size = GET_SIZE(HDRP(NEXT_BLKP(ptr)));
+  newptr = mm_malloc(size);
 
-      if (!next_alloc && (oldsize + next_size) >= asize) {
-        remove_free_block(NEXT_BLKP(ptr));
-        PUT(HDRP(ptr), PACK(oldsize + next_size, 1));
-        PUT(FTRP(ptr), PACK(oldsize + next_size, 1));
-        return ptr;
-      } else {
-        newptr = mm_malloc(size);
-        memcpy(newptr, ptr, oldsize);
-        mm_free(ptr);
-        return newptr;
-      }
-    }
+  /* If realloc() fails the original block is left untouched  */
+  if(!newptr) {
+    return 0;
+  }
+
+  /* Copy the old data. */
+  oldsize = GET_SIZE(HDRP(ptr));
+  if(size < oldsize) oldsize = size;
+  memcpy(newptr, ptr, oldsize);
+
+  /* Free the old block. */
+  mm_free(ptr);
+
+  return newptr;
 }
 
 /* 
@@ -308,40 +251,17 @@ static void place(void *bp, size_t asize)
   }
 }
 
-static void replace(void *bp, size_t asize) {
-  size_t csize = GET_SIZE(HDRP(bp));
-
-  if ((csize - asize) >= (2*DSIZE)) {
-    PUT(HDRP(bp), PACK(asize, 1));
-    PUT(FTRP(bp), PACK(asize, 1));
-    bp = NEXT_BLKP(bp);
-    PUT(HDRP(bp), PACK(csize-asize, 0));
-    PUT(FTRP(bp), PACK(csize-asize, 0));
-    insert_free_block(bp);
-  }
-  else {
-    PUT(HDRP(bp), PACK(csize, 1));
-    PUT(FTRP(bp), PACK(csize, 1));
-  }
-}
-
 /* 
  * find_fit - Find a fit for a block with asize bytes 
  */
 static void *find_fit(size_t asize)
 {
-  void **rootp;
   void *bp;
 
-  rootp = get_free_rootp(asize);
-  while (rootp) {
-    // first fit search
-    bp = *rootp;
-    while (bp) {
-      if (asize <= GET_SIZE(HDRP(bp))) return bp;
-      bp = GET_NEXT(bp);
-    }
-    rootp = get_greater_rootp(rootp);
+  bp = free_listp;
+  while (bp) {
+    if (asize <= GET_SIZE(HDRP(bp))) return bp;
+    bp = GET_NEXT(bp);
   }
 
   return NULL; /* No fit */
@@ -372,90 +292,45 @@ static void *coalesce(void *bp)
   }
 
   else if (!prev_alloc && next_alloc) {      /* Case 3 */
-    remove_free_block(PREV_BLKP(bp));
-
     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
     PUT(FTRP(bp), PACK(size, 0));
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
     bp = PREV_BLKP(bp);
-
-    insert_free_block(bp);
   }
 
   else {                                     /* Case 4 */
     remove_free_block(NEXT_BLKP(bp));
-    remove_free_block(PREV_BLKP(bp));
 
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + 
       GET_SIZE(FTRP(NEXT_BLKP(bp)));
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
     PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
     bp = PREV_BLKP(bp);
-
-    insert_free_block(bp);
   }
   return bp;
 }
 
 /*
- * Free list/tree operating functions
+ * Free list operating functions
  */
-static void init_free_root() {
-  root_16 = 0;
-  root_32 = 0;
-  root_64 = 0;
-  root_128 = 0;
-  root_256 = 0;
-  root_512 = 0;
-  root_1024 = 0;
-  root_2048 = 0;
-  root_4096 = 0;
-  root_etc = 0;
+static void init_free_list() {
+  free_listp = 0;
 }
 
 static void insert_free_block(void *bp) {
-  void **rootp = get_free_rootp(GET_SIZE(HDRP(bp)));
-
-  if (*rootp) SET_PREV(*rootp, bp);
+  if (free_listp) SET_PREV(free_listp, bp);
   SET_PREV(bp, NULL);
-  SET_NEXT(bp, *rootp);
-  *rootp = bp;
+  SET_NEXT(bp, free_listp);
+  free_listp = bp;
 }
 
 static void remove_free_block(void *bp) {
-  void **rootp = get_free_rootp(GET_SIZE(HDRP(bp)));
   void *prev = GET_PREV(bp);
   void *next = GET_NEXT(bp);
 
   if (prev) SET_NEXT(prev, next);
-  else *rootp = next;
+  else free_listp = next;
   if (next) SET_PREV(next, prev);
-}
-
-static void **get_free_rootp(size_t asize) {
-  if (asize <= 16) return &root_16;
-  else if (asize <= 32) return &root_32;
-  else if (asize <= 64) return &root_64;
-  else if (asize <= 128) return &root_128;
-  else if (asize <= 256) return &root_256;
-  else if (asize <= 512) return &root_512;
-  else if (asize <= 1024) return &root_1024;
-  else if (asize <= 2048) return &root_2048;
-  else if (asize <= 4096) return &root_4096;
-  else return &root_etc;
-}
-
-static void **get_greater_rootp(void **rootp) {
-  if (rootp == &root_16) return &root_32;
-  else if (rootp == &root_32) return &root_64;
-  else if (rootp == &root_64) return &root_128;
-  else if (rootp == &root_128) return &root_256;
-  else if (rootp == &root_256) return &root_512;
-  else if (rootp == &root_512) return &root_1024;
-  else if (rootp == &root_1024) return &root_2048;
-  else if (rootp == &root_2048) return &root_4096;
-  else if (rootp == &root_4096) return &root_etc;
-  else return NULL;
 }
 
 /*
